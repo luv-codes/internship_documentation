@@ -1,4 +1,4 @@
-# Internship Documentation — June 15 to July 22, 2026
+# Internship Documentation — June 15 to July 23, 2026
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
@@ -12,7 +12,7 @@
 2. [Timeline](#timeline)
    - [Phase 1: Ingestion Pipeline & Knowledge Graph (Jun 15 – Jul 9)](#phase-1-ingestion-pipeline--knowledge-graph)
    - [Phase 2: Documentation & Handoff (Jul 7 – Jul 14)](#phase-2-documentation--handoff)
-   - [Phase 3: RAG Query Agent (Jul 16 – Jul 22)](#phase-3-rag-query-agent)
+   - [Phase 3: RAG Query Agent (Jul 16 – Jul 23)](#phase-3-rag-query-agent)
 3. [Technologies Used](#technologies-used)
 4. [Architecture Patterns](#architecture-patterns)
 5. [Key Projects](#key-projects)
@@ -112,10 +112,10 @@ Created a dedicated documentation repository containing:
 
 ---
 
-### Phase 3: RAG Query Agent
-*July 16 – 22, 2026*
+### Phase 3: RAG Query Agent & Production Optimization
+*July 16 – 23, 2026*
 
-Built a cross-project RAG query agent capable of answering questions across multiple document collections simultaneously.
+Built a cross-project RAG query agent capable of answering questions across multiple document collections simultaneously, then production-optimized with 100% traceability and batched pipeline operations.
 
 **Query Pipeline Architecture**
 - FastAPI server with PostgreSQL + pgvector backend
@@ -150,6 +150,49 @@ Identified and fixed 7 root-cause issues across the query pipeline:
 7. Same issue in semantic route (removed filter entirely)
 
 Verified across 10+ queries of all 5 types with consistent correct results.
+
+**Pipeline Speed & Reliability Optimizations (Jul 23)**
+- Switched LLM model from Gemini 2.5 Flash to GPT-5.4-mini for 4x faster inference (0.56s per call)
+- Increased LLM concurrency from 5→20 and summary concurrency from 20→50
+- Fixed N+1 query bottlenecks in entity dedup and cleanup operations (batched PATCH/DELETE with `IN()` queries):
+  - Entity dedup: reduced from 3N API calls to 3 per canonical group
+  - Noise removal: reduced from 2N to 2 total calls
+  - Relationship ID fetching: reduced from N to 1 per 25 pairs via OR queries
+- Fixed null byte crash in Supabase inserts (deep-clean using JSON roundtrip + strip)
+- Reduced pipeline time from ~15min to ~2.5min for 5 projects with all fixes combined (LLM phase: 30s vs ~5min)
+
+**Entity Traceability & 100% Community Coverage (Jul 23)**
+- Built entity traceability system: after LLM extraction, entity UUIDs are stored back onto section chunks whose content mentions them
+- Added `analysis_chunk_ids` column (UUID[]) to community summaries as a guaranteed fallback
+- Three-tier chunk matching: UUID match → section text search → analysis chunk text search
+- Result: 100% of communities (191/191) have at least one chunk reference; 98% have analysis_chunk_ids
+
+**Community Summary Enrichment (Jul 23)**
+- Added 6 new columns to `agent_community_summaries` for richer query plane context:
+  - `analysis_chunk_ids UUID[]` — raw chunk references for guaranteed retrieval
+  - `top_relationships JSONB` — top 10 entity relationships within community
+  - `entity_type_counts JSONB` — distribution of entity types
+  - `relation_type_counts JSONB` — distribution of relation types
+  - `key_findings TEXT[]` — 3-5 LLM-extracted key findings per community
+- Relation normalizer CLUSTER_THRESHOLD reduced from 5→2 to preserve diverse types (41+ types, top type at <26%)
+
+**Lite RAG Agent (Jul 23)**
+- Built a lightweight single-project RAG agent with FastAPI router
+- 4 search paths: Knowledge Graph, Vector Search, Community Summaries, Metadata Lookup
+- BGE reranker (baai/bge-reranker-v2-m3) for relevance scoring across all evidence
+- Community routing: matched communities fetch actual section + analysis chunks as evidence
+- GraphRAG content search fallback: finds entity names in section chunk text when chunk_id doesn't match
+
+**Cross-Project Agent Updates (Jul 23)**
+- Updated community_vector_search to fetch and return analysis_chunk_ids alongside chunk_ids
+- Both search paths (vector + relational) now fetch routed chunks from both `agent_section_chunks` and `analysis_chunks`
+- All community metadata fields pass through to LLM prompt (top_relationships, key_findings, etc.)
+
+**Schema & Documentation (Jul 23)**
+- Migrations for all new columns added to `db/initial_schema.sql`
+- Updated `match_agent_communities` RPC to return all new fields
+- Created `DATA_ARCHITECTURE.md` documenting the full UUID flow, traceability system, and column-level explanations
+- 26 files changed, 2,500+ lines across the codebase
 
 ---
 
