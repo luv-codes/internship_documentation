@@ -1,4 +1,4 @@
-# Internship Documentation — June 15 to July 23, 2026
+# Internship Documentation — June 15 to July 27, 2026
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
@@ -193,6 +193,81 @@ Verified across 10+ queries of all 5 types with consistent correct results.
 - Updated `match_agent_communities` RPC to return all new fields
 - Created `DATA_ARCHITECTURE.md` documenting the full UUID flow, traceability system, and column-level explanations
 - 26 files changed, 2,500+ lines across the codebase
+
+---
+
+### Phase 4: Cloud Deployment & Production Hardening
+*July 24 – 27, 2026*
+
+Deployed both the ingestion pipeline and the advanced query plane to AWS ECS Fargate with full automation, idempotency, and fault tolerance.
+
+**Architecture (3-Layer)**
+
+```
+Sahil's Frontend → Query Plane (ECS Service + ALB) → Supabase
+                                                        ↑
+                                              Ingestion Plane (ECS Tasks)
+                                              triggered by webhook when analyses.status=complete
+```
+
+**Ingestion Plane (Fully Automated)**
+
+1. **Trigger**: Supabase Database Webhook on `analyses` UPDATE where status changes to `'complete'`
+2. **Flow**: Webhook → API Gateway → SQS Queue → Lambda Dispatcher → ECS Fargate Task
+3. **Lambda Dispatcher**: Checks `agent_ingestion_log` for idempotency, writes a processing lock, then calls `ecs.run_task()`
+4. **ECS Task**: 4 vCPU / 8 GB RAM container runs the full 9-stage pipeline (Source B → entity extraction → cleanup → LLM relations → normalization → chunk graph → Louvain communities → community summaries → mark processed)
+5. **All results** written to Supabase `agent_*` tables
+
+**Infrastructure Components**
+- ECR: Two repositories (`halo-ingestion` for pipeline, `halo-query-plane` for API server)
+- ECS Cluster: Shared Fargate cluster
+- SQS Queue: Ingestion trigger queue + DLQ
+- Lambda Dispatcher: Thin Python function (checks log, writes lock, launches ECS)
+- API Gateway: Receives Supabase webhooks and pushes to SQS
+- IAM Roles: Least-privilege for each component
+- CloudWatch: Centralized logging for all ECS tasks and Lambda functions
+
+**Query Plane (Always-On Service)**
+
+- Advanced query plane module deployed as an always-running FastAPI server on ECS Fargate
+- ALB: Application Load Balancer provides stable endpoint
+- Endpoint: `POST /query-plane/query`
+- Request: `{"query": "...", "org_id": "...", "analysis_id": "..."}`
+- Response: `{"answer": "...", "status": "answered|partial|insufficient", "confidence": "high|medium|low", "citations": [...], "projects": [...], "metadata": {...}}`
+- Reads from the same Supabase `agent_*` tables that ingestion writes to
+
+**Problems Identified & Fixed (Jul 27)**
+
+| Problem | Root Cause | Fix |
+|---|---|---|
+| Metadata only 1 row | Hardcoded taggers only work with one specific JSON format. Different pipelines produce different structures. | Changed tagger.py to always run the LLM tagger — works with any JSON format. |
+| Duplicate log entries | Lambda wrote a "processing" lock, entrypoint tried to update it but pipeline's `mark_processed` did an INSERT instead. | Entrypoint now writes a single "processing" row at startup and updates to "complete" or "failed" at end. |
+| All tasks processed the same analysis | Pipeline polls for ANY unprocessed analysis, not the one passed via env var. | Added `specific_analysis_id` parameter to the orchestrator function. |
+| Stuck tasks with no logs | Container crashed before Python logging initialized. No record of failure. | Entrypoint writes "processing" status immediately. Retry Lambda detects stale entries. |
+| IAM policy blocked Lambda | Lambda's ECS permission was pinned to an old task definition revision. | Updated policy to use wildcard for all revisions. |
+
+**Bulletproof Mechanisms**
+
+- **Status Tracking**: Every analysis writes processing → complete or failed in the ingestion log. Survives container crashes.
+- **Auto-Retry**: Retry Lambda runs every 15 minutes via CloudWatch Events. Finds tasks stuck in processing for >45 min or failed → re-launches ECS task.
+- **Idempotency**: Lambda checks log before launching. ECS task updates status row at end. Exactly 1 row per analysis.
+- **Each task processes its own analysis**: `specific_analysis_id` ensures no task picks up the wrong analysis.
+- **Metadata for every analysis**: LLM tagger always runs — works with any JSON format.
+
+**Supabase Migration**
+- Created a safe migration script that only creates agent_* tables and webhook trigger
+- Does NOT modify existing pipeline tables
+- Added FK constraints on agent tables referencing the analyses table with ON DELETE CASCADE
+- 9 existing analyses re-processed through the pipeline on the new database
+
+**Docker Images**
+- `halo-ingestion` — Ingestion pipeline (runs as one-off ECS tasks)
+- `halo-query-plane` — Query plane API (runs as always-on ECS service)
+
+**Final Data (after full pipeline run)**
+- 8 analyses processed with complete data
+- 8 metadata rows, 9,410 entities, 28,648 relationships, 280 communities
+- 89 section chunks across all analyses
 
 ---
 
