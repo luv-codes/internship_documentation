@@ -1,4 +1,4 @@
-# Internship Documentation — June 15 to July 27, 2026
+# Internship Documentation — June 15 to July 29, 2026
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
@@ -13,6 +13,8 @@
    - [Phase 1: Ingestion Pipeline & Knowledge Graph (Jun 15 – Jul 9)](#phase-1-ingestion-pipeline--knowledge-graph)
    - [Phase 2: Documentation & Handoff (Jul 7 – Jul 14)](#phase-2-documentation--handoff)
    - [Phase 3: RAG Query Agent (Jul 16 – Jul 23)](#phase-3-rag-query-agent)
+   - [Phase 4: Cloud Deployment & Production Hardening (Jul 24 – Jul 27)](#phase-4-cloud-deployment--production-hardening)
+   - [Phase 5: RFP Data Pipeline & Production Hardening (Jul 28 – Jul 29)](#phase-5-rfp-data-pipeline--production-hardening)
 3. [Technologies Used](#technologies-used)
 4. [Architecture Patterns](#architecture-patterns)
 5. [Key Projects](#key-projects)
@@ -271,7 +273,69 @@ Sahil's Frontend → Query Plane (ECS Service + ALB) → Supabase
 
 ---
 
-## Technologies Used
+### Phase 5: RFP Data Pipeline & Production Hardening
+*July 28 – 29, 2026*
+
+Production deployment of the full ingestion pipeline with a real-world RFP dataset (~5.69 GB), compression pipeline, cross-project knowledge graph, and query plane with dynamic project detection.
+
+**RFP Data Compression Pipeline (Jul 28)**
+
+A 5.69 GB RFP submission folder (zip) was compressed to 270 MB (95% reduction) through a multi-stage pipeline:
+
+1. **File-type stripping** — Removed 795 unwanted files (.dwg, .py, .jpeg, .json, .cfg, .exe, .bak, etc.) → 1.20 GB
+2. **Image stripping** — Stripped 92,268 embedded images from PDFs, XLSX, and PPTX using PyMuPDF (fitz) → 895 MB
+3. **Drawing deletion** — Removed 57 CAD drawing PDFs (floor plans, elevations, mark-ups — zero useful text) → 628 MB
+4. **Office media cleanup** — Physically removed media files from inside Office zip archives (80 images from XLSX, 76 from PPTX) → 312 MB
+5. **Font subsetting** — Ghostscript pdfwrite with font subsetting on all 322 PDFs → 270 MB
+
+Each step verified for data integrity: text content compared word-for-word between original and compressed versions (100% match). All 59 XLSX verified for sheet and cell count preservation.
+
+**Ingestion Pipeline Validated End-to-End**
+
+Three test analyses processed through the full pipeline:
+
+| Test | Files | Chunks | Entities | Relationships | Communities |
+|---|---|---|---|---|---|
+| Bahrain Bay Office | 1 | 13 | 247 | 1,000+ | 16 |
+| KAFD Tower Block C | 1 | 14 | 353 | 3,388 | 14 |
+| Yas Bay Boutique Hotel | 1 | 14 | 423 | 3,412 | 39 |
+
+**Issues Identified & Fixed**
+
+| Problem | Root Cause | Fix |
+|---|---|---|
+| ECS container failed to start | Docker image built for ARM64 (Apple Silicon) but ECS Fargate requires `linux/amd64` | Added `--platform linux/amd64` to all Docker builds |
+| Query results truncated | PostgREST default limit of 1000 rows — queries without pagination silently dropped data | Added `fetch_all_paginated()` helper in config.py; updated 3 files (llm_relations.py, entity_extractor.py, chunk_linker.py) |
+| File tracing capped at 100 | `source_b.py` used `.limit(100)` on analysis_files query | Increased to `.limit(500)` |
+| Chunk content not searchable by project name | Query plane searches chunk content via ILIKE, but project name was only in metadata | Added `[Project: {name}]` prefix to every chunk's content in Source B |
+| Query plane cache never expired | In-memory dict cache had no TTL — analysis was invisible until manual restart | Added 60-second TTL to all cache entries |
+| New projects invisible to query planner | `detect_project_names()` only checked static alias list | Added dynamic fallback that extracts capitalized multi-word phrases from the question |
+| "go no go" queries incorrectly filtered | Metadata retriever's risk detection set `decision=""no""` whenever "no-go" appeared in query | Added `and ""analysis"" not in lowered` guard — "go no go analysis" no longer triggers false filter |
+| Project scope not tightened | `strengthen_metadata_filter_plan()` only updated scope when guardrails applied | Added fallback that tightens scope to `single_project` when project names are detected |
+| ECS cached old image digest | `:latest` tag cached by ECS host — pushing new image didn't update running tasks | Registered new task definition revisions with explicit image tags (`:rev6`) |
+
+**Fixes Deployed (rev 7)**
+
+- `halo-ingestion` (ECS task): Rev 5 — pagination, .limit(500), [Project:] prefix
+- `halo-query-plane` (ECS service): Rev 7 — dynamic project detection, 60s TTL cache, decision filter fix, project scope tightening
+- Old revisions 1–6 deregistered to prevent rollback confusion
+
+**Query Plane Improvements**
+
+- Dynamic project name detection from natural language queries (no hardcoded alias list)
+- 60-second cache TTL — new projects auto-discovered within 1 minute
+- Decision filter no longer triggered by "go no go analysis" phrase
+- Project scope correctly tightened to `single_project` for named-project queries
+- All old task definitions cleaned up (rev 1–6 deregistered)
+
+**Final System State**
+
+- Ingestion pipeline: Fully automated, webhook-triggered, handles 50,000+ chunks with pagination
+- Query plane: Always-on ECS service, auto-discovers new projects, 60s cache refresh
+- 02_RFP.zip: 270 MB (from 5.69 GB original), text-verified, ready for pipeline ingestion
+- All `agent_*` tables: Populated automatically end-to-end (chunks → entities → relationships → communities → metadata)
+
+---
 
 ### Cloud & Infrastructure
 | Technology | Usage |
