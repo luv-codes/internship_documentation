@@ -1,4 +1,4 @@
-# Internship Documentation — June 15 to July 29, 2026
+# Internship Documentation — June 15 to July 30, 2026
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
@@ -15,6 +15,7 @@
    - [Phase 3: RAG Query Agent (Jul 16 – Jul 23)](#phase-3-rag-query-agent)
    - [Phase 4: Cloud Deployment & Production Hardening (Jul 24 – Jul 27)](#phase-4-cloud-deployment--production-hardening)
    - [Phase 5: RFP Data Pipeline & Production Hardening (Jul 28 – Jul 29)](#phase-5-rfp-data-pipeline--production-hardening)
+   - [Phase 6: Initial Pipeline Planning & n8n Bottleneck Analysis (Jul 30)](#phase-6-initial-pipeline-planning--n8n-bottleneck-analysis)
 3. [Technologies Used](#technologies-used)
 4. [Architecture Patterns](#architecture-patterns)
 5. [Key Projects](#key-projects)
@@ -337,6 +338,54 @@ Three test analyses processed through the full pipeline:
 
 ---
 
+### Phase 6: Initial Pipeline Planning & n8n Bottleneck Analysis
+*July 30, 2026*
+
+**n8n Production Bottleneck Discovery**
+
+Production monitoring of Sahil's n8n pipeline processing a large batch (analysis `db65adc0`, 369 files, 499 MB) revealed a critical bottleneck:
+
+- n8n successfully chunked all 369 files into **1,215 chunks** (~546K words, avg 562 tokens per chunk)
+- The embedding step failed with **HTTP 400: "maximum input length is 8192 tokens"** — 3 outlier chunks exceeded the 8K limit (largest: 12,570 tokens)
+- n8n generates sections **one-by-one** (~2 min each) — the bottleneck is inherent to its sequential architecture
+- Analysis reset and retried with a 2,000-word chunk cap to prevent recurrence
+
+**Key findings for the Initial Pipeline design:**
+- Chunk size enforcement is critical — a hard cap prevents embedding model failures
+- 2,000-word chunks (~2,600 tokens) comfortably fit within any embedding model limit
+- Our 2-call LLM approach (metadata + sections) is inherently faster than n8n's per-section generation
+- DeepSeek V4 Flash's 64K+ token context eliminates the context window limitation entirely
+
+**Initial Pipeline Plan Finalized**
+
+Completed the full architecture plan to replace Sahil's n8n pipeline with a Python-based ECS Fargate pipeline:
+
+- **5 phases**: Setup → Download/Parse/Extract → LLM Sections (2 calls) → Metadata → Finalize
+- **Image extraction (Phase 2b)** — dual-output design:
+  - **Step A**: OCR text from images → `analysis_chunks` (searchable alongside document text)
+  - **Step B**: Image assets → `analysis_images` with full FK traceability (`chunk_id`, `source_file_id`, `analysis_id`, `organization_id`) + Bedrock Titan Multimodal embeddings (1024-dim)
+- **3 storage buckets**: `rfp-uploads` (1 GB), `analysis-content` (100 MB), `analysis-images` (10 MB per image)
+- **5 database tables**: analyses, analysis_files, analysis_chunks, analysis_sections, analysis_images
+- **Independence**: No changes to existing Ingestion Pipeline or Query Plane
+
+**Deloitte Competitive Analysis**
+
+Completed comprehensive research on Deloitte's RFP AI pipeline tools (DocQMiner, NavigAite, Pursuit CoE, Formalyzer):
+
+- Key gaps vs Halo RAG: **no knowledge graph**, **no image extraction**, **no vector embeddings**, **no community detection**
+- Deloitte relies on human-in-the-loop validation — ours is fully automated
+- DocQMiner uses traditional NLP ensembles (not GenAI) for extraction
+- Documented in `deloitte-rfp-analysis-pipeline.md` as competitive reference
+
+**Documents Updated (5 files in `~/Desktop/Sahil n8n replacement plan/`):**
+- `initial-pipeline-plan.md` — Full plan with image extraction, DB tables, storage buckets
+- `initial-pipeline-plan.docx` — Word document (master file)
+- `supabase.md` — All schemas, FK traceability, storage buckets, row counts
+- `halo-rag-current-state.md` — Current deployment state with image extraction notes
+- `deloitte-rfp-analysis-pipeline.md` — New: 6-page competitive analysis
+
+---
+
 ### Cloud & Infrastructure
 | Technology | Usage |
 |---|---|
@@ -434,6 +483,7 @@ Entity Search → Load Neighbourhood → Interactive Graph → Sidebar Details
 | Graph Visualization | D3.js entity graph explorer with search, path finding, evidence panels | Part of pipeline |
 | RAG Query Agent | Cross-project RAG with 6 search paths, deterministic arbitration | ~30 commits |
 | Documentation Repo | Architecture docs, API references, security checklists, MCP guides | ~8 commits |
+| Initial Pipeline Plan | n8n replacement design, image extraction pipeline, Deloitte competitive analysis | ~5 docs |
 
 ---
 
@@ -448,3 +498,6 @@ Entity Search → Load Neighbourhood → Interactive Graph → Sidebar Details
 - **RAG Systems**: Query classification, evidence arbitration, guard checks, answer generation
 - **Documentation**: Architecture docs, API references, security audits, deployment guides
 - **Debugging**: Root-cause analysis identifying systemic bugs through trace-driven investigation
+- **Production Monitoring**: Real-time pipeline monitoring, bottleneck identification, token limit diagnostics
+- **Competitive Analysis**: Industry research comparing pipeline architectures against Deloitte enterprise tools
+- **Technical Planning**: Architecture design for pipeline replacement with image extraction and multimodal search
