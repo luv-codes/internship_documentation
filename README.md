@@ -1,8 +1,29 @@
-# Internship Documentation — June 15 to July 31, 2026
+# Internship Documentation
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
 > All descriptions are of technologies, architectures, and problem domains only.
+
+---
+
+## 📑 Version Toggle
+
+> Click to switch between documentation periods:
+
+<details open>
+<summary><strong>📄 README v1 — June 15 to July 31, 2026</strong> (currently shown — the full document below)</summary>
+
+</details>
+
+<details>
+<summary><strong>📄 README v2 — August 2026 onwards</strong> (click to expand)</summary>
+
+### Internship Documentation — August 2026 onwards
+
+> This section documents work from **August 1, 2026** onwards.
+> Content will be added here as the work progresses. See [`readme2.md`](readme2.md) for the standalone file.
+
+</details>
 
 ---
 
