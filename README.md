@@ -1,4 +1,4 @@
-# Internship Documentation — June 15 to July 30, 2026
+# Internship Documentation — June 15 to July 31, 2026
 
 > High-level overview of work completed during this internship period.
 > No proprietary code, client names, or confidential business logic is included.
@@ -16,6 +16,7 @@
    - [Phase 4: Cloud Deployment & Production Hardening (Jul 24 – Jul 27)](#phase-4-cloud-deployment--production-hardening)
    - [Phase 5: RFP Data Pipeline & Production Hardening (Jul 28 – Jul 29)](#phase-5-rfp-data-pipeline--production-hardening)
    - [Phase 6: Initial Pipeline Planning & n8n Bottleneck Analysis (Jul 30)](#phase-6-initial-pipeline-planning--n8n-bottleneck-analysis)
+   - [Phase 7: Large-Batch Stress Test & Scalability Fixes (Jul 31)](#phase-7-large-batch-stress-test--scalability-fixes)
 3. [Technologies Used](#technologies-used)
 4. [Architecture Patterns](#architecture-patterns)
 5. [Key Projects](#key-projects)
@@ -386,6 +387,44 @@ Completed comprehensive research on Deloitte's RFP AI pipeline tools (DocQMiner,
 
 ---
 
+### Phase 7: Large-Batch Stress Test & Scalability Fixes
+*July 31, 2026*
+
+Proved the ingestion pipeline can process **5,000+ chunks** end-to-end by stress-testing it on the largest real-world batch yet, fixing three root-cause scalability bugs discovered along the way.
+
+**The Big Batch (db65adc0)**
+- 369 files, 498 MB (ZIPs, PDFs, XLSX, DOCX) → 4,694 chunks, 6 sections
+- First time the pipeline handled a 5,000-chunk-scale analysis to completion
+
+**3 Root-Cause Scalability Fixes**
+
+| # | Bug | Symptom | Fix |
+|---|---|---|---|
+| 1 | `analysis_chunks` queries not paginated | PostgREST caps at 1,000 rows/query → silently dropped 3,694 of 4,694 chunks in Louvain + cross-chunk post-processor | Added `fetch_all_paginated()` to `graph/louvain.py` + `graph/cross_chunk_post_processor.py` |
+| 2 | O(N×M) entity-resolution loop | For each of ~30K entity names, scanned all ~47K relationships (~1.4B ops) → froze for 14+ min, zero logs | Rebuilt as O(N+M): single-pass `name_meta` lookup dict then O(1) lookups (`graph/llm_relations.py`) |
+| 3 | Single giant entity insert | One `insert()` of 30-60K rows exceeded Postgres statement timeout (57014) | Batch insert at 500 rows/insert, matching the relationship writer's pattern |
+
+**Successful Result (rev11)**
+
+| Metric | Value |
+|---|---|
+| Entities | 59,941 |
+| Relationships | 106,483 |
+| Communities | 28 |
+| Section chunks | 11 |
+| Total run time | ~63 min |
+| Exit code | 0 (clean) |
+
+**Other Operations (Jul 31)**
+- **Query plane updated** — pulled Rayyanur's `query_plane/` from main (user-premise validation, resolved/unresolved conflict handling, stricter citation cleanup, community summary routing, clearer gap categories), built `halo-query-plane:rev10`, deployed to ECS
+- **ALB idle timeout** raised 300s → **600s** so long relational queries don't get cut off
+- **Docker image cleanup** — removed old rev9/rev10 ingestion + rev6/rev9 query-plane images from ECR and local
+- **Relational query testing** — verified both agents answer multi-hop questions (parties↔payment terms, insurance↔bonds, disciplines↔subcontractors) with accurate citations across the 59K-entity graph
+
+**Key takeaway:** The pipeline is now proven at 5,000-chunk scale — the pagination, loop-complexity, and insert-batching fixes eliminated all three classes of large-batch failure.
+
+---
+
 ### Cloud & Infrastructure
 | Technology | Usage |
 |---|---|
@@ -484,6 +523,7 @@ Entity Search → Load Neighbourhood → Interactive Graph → Sidebar Details
 | RAG Query Agent | Cross-project RAG with 6 search paths, deterministic arbitration | ~30 commits |
 | Documentation Repo | Architecture docs, API references, security checklists, MCP guides | ~8 commits |
 | Initial Pipeline Plan | n8n replacement design, image extraction pipeline, Deloitte competitive analysis | ~5 docs |
+| Large-Batch Scaling | 4,694-chunk stress test, 3 scalability fixes (pagination, O(N+M) loop, batch insert) | rev11 image |
 
 ---
 
@@ -501,3 +541,4 @@ Entity Search → Load Neighbourhood → Interactive Graph → Sidebar Details
 - **Production Monitoring**: Real-time pipeline monitoring, bottleneck identification, token limit diagnostics
 - **Competitive Analysis**: Industry research comparing pipeline architectures against Deloitte enterprise tools
 - **Technical Planning**: Architecture design for pipeline replacement with image extraction and multimodal search
+- **Performance Engineering**: Algorithmic complexity fixes (O(N×M)→O(N+M)), query batching, pagination, large-batch debugging
